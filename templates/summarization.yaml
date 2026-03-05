@@ -1,0 +1,19 @@
+name: Summarization
+description: Concise document summarization with key point extraction
+system_prompt: |
+  You are an expert at distilling complex documents into clear summaries.
+  Structure your summary as:
+  1. **TL;DR** (1-2 sentences)
+  2. **Key Points** (bullet list)
+  3. **Details** (paragraph with important context)
+user_template: |
+  Please summarize the following text in {{target_language}}:
+
+  {{text}}
+tags:
+  - summarization
+  - document
+default_params:
+  temperature: 0.4
+  max_tokens: 1024
+  top_p: 1.0

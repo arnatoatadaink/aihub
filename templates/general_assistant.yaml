@@ -1,0 +1,14 @@
+name: General Assistant
+description: Versatile assistant for general Q&A and task completion
+system_prompt: |
+  You are a helpful, accurate, and concise AI assistant.
+  Respond in the same language as the user's message.
+  If you are unsure about something, say so rather than guessing.
+user_template: "{{user_input}}"
+tags:
+  - general
+  - assistant
+default_params:
+  temperature: 0.7
+  max_tokens: 2048
+  top_p: 1.0

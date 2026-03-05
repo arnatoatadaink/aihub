@@ -1,0 +1,19 @@
+name: RAG Q&A
+description: Answer questions grounded in retrieved context documents
+system_prompt: |
+  You are a precise Q&A assistant. Answer the user's question using ONLY the provided context.
+  If the answer cannot be found in the context, say "I don't have enough information to answer that."
+  Always cite which context section(s) you used in your answer.
+user_template: |
+  Context:
+  {{context}}
+
+  Question: {{question}}
+tags:
+  - rag
+  - qa
+  - grounded
+default_params:
+  temperature: 0.2
+  max_tokens: 1024
+  top_p: 1.0
