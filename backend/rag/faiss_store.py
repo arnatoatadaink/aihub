@@ -91,13 +91,13 @@ class FAISSStore:
         if len(keep_indices) == before:
             return False
 
-        # Rebuild index from kept embeddings
+        # Rebuild index from kept embeddings.
         # NOTE: faiss.IndexFlatL2 does not support direct deletion; we reconstruct.
+        # reconstruct_n fetches all vectors in one call (O(n)) instead of per-item.
         new_index = faiss.IndexFlatL2(EMBED_DIM)
         if keep_indices:
-            kept_vecs = np.vstack(
-                [self._index.reconstruct(i) for i in keep_indices]
-            ).astype(np.float32)
+            all_vecs = self._index.reconstruct_n(0, self._index.ntotal)
+            kept_vecs = all_vecs[keep_indices].astype(np.float32)
             new_index.add(kept_vecs)
         self._index = new_index
         self._docs = [self._docs[i] for i in keep_indices]

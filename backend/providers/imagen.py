@@ -17,13 +17,14 @@ class ImagenProvider(BaseProvider):
     modal_type: str = "image"
 
     def __init__(self):
+        import google.generativeai as genai
         self.api_key = os.getenv("GEMINI_API_KEY", "")
+        if self.api_key:
+            genai.configure(api_key=self.api_key)
 
     async def generate(self, messages: list, params: dict) -> str:
         """Generate an image and return a base64-encoded data URI."""
         import google.generativeai as genai
-
-        genai.configure(api_key=self.api_key)
 
         prompt = messages[-1].get("content", "") if messages else ""
         model_name = params.get("model", AVAILABLE_MODELS[0])
@@ -54,7 +55,6 @@ class ImagenProvider(BaseProvider):
             return False
         try:
             import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
             list(genai.list_models())
             return True
         except Exception:

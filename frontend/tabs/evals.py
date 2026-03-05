@@ -1,19 +1,12 @@
 """Eval Dashboard tab — run prompt evaluations across multiple providers/models."""
 import json
-import os
 import time
 from typing import Generator
 
 import gradio as gr
 import httpx
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-
-PROVIDER_MODEL_MAP = {
-    "gemini": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
-    "openai": ["gpt-4o", "gpt-4o-mini"],
-    "anthropic": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-}
+from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP
 
 
 def _chat(provider: str, model: str, system: str, user: str, temperature: float, max_tokens: int) -> tuple[str, float]:

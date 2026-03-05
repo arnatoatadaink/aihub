@@ -5,8 +5,8 @@ Veo is an async API — generation is submitted, then polled until ready.
 """
 from __future__ import annotations
 
+import asyncio
 import os
-import time
 from typing import AsyncGenerator
 
 from .base import BaseProvider
@@ -23,13 +23,14 @@ class VeoProvider(BaseProvider):
     modal_type: str = "video"
 
     def __init__(self):
+        import google.generativeai as genai
         self.api_key = os.getenv("GEMINI_API_KEY", "")
+        if self.api_key:
+            genai.configure(api_key=self.api_key)
 
     async def generate(self, messages: list, params: dict) -> str:
         """Submit video generation and poll until complete. Returns video URI."""
         import google.generativeai as genai
-
-        genai.configure(api_key=self.api_key)
 
         prompt = messages[-1].get("content", "") if messages else ""
         model_name = params.get("model", AVAILABLE_MODELS[0])
@@ -49,7 +50,7 @@ class VeoProvider(BaseProvider):
         for _ in range(MAX_POLLS):
             if operation.done:
                 break
-            time.sleep(POLL_INTERVAL)
+            await asyncio.sleep(POLL_INTERVAL)
             operation = client.operations.get(operation)
 
         if not operation.done:
@@ -73,7 +74,6 @@ class VeoProvider(BaseProvider):
             return False
         try:
             import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
             list(genai.list_models())
             return True
         except Exception:
