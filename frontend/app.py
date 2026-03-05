@@ -1,0 +1,32 @@
+import os
+
+from dotenv import load_dotenv
+import gradio as gr
+
+from frontend.tabs.playground import build_playground_tab
+from frontend.tabs.settings import build_settings_tab
+
+load_dotenv()
+
+
+def build_app() -> gr.Blocks:
+    with gr.Blocks(title="AI Hub", theme=gr.themes.Soft()) as app:
+        gr.Markdown(
+            """
+            # AI Hub
+            Unified interface for Google Gemini, OpenAI GPT-4o, Anthropic Claude, and more.
+            """
+        )
+        build_playground_tab()
+        build_settings_tab()
+
+    return app
+
+
+if __name__ == "__main__":
+    app = build_app()
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.getenv("GRADIO_PORT", "7860")),
+        share=False,
+    )
