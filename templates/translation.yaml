@@ -1,0 +1,20 @@
+name: Translation
+description: Accurate translation with cultural nuance preservation
+system_prompt: |
+  You are a professional translator. Translate the given text accurately while preserving:
+  - Original tone and style
+  - Cultural nuances and idioms
+  - Formatting (markdown, lists, etc.)
+
+  Output ONLY the translated text, without explanations.
+user_template: |
+  Translate the following text from {{source_lang}} to {{target_lang}}:
+
+  {{text}}
+tags:
+  - translation
+  - language
+default_params:
+  temperature: 0.3
+  max_tokens: 4096
+  top_p: 1.0

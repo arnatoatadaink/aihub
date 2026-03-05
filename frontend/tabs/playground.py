@@ -1,25 +1,10 @@
-import os
+import json
 from typing import Generator
 
 import gradio as gr
 import httpx
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-
-PROVIDER_MODEL_MAP = {
-    "gemini": [
-        "gemini-2.5-pro",
-        "gemini-2.0-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-    ],
-    "openai": [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-4-turbo",
-        "gpt-3.5-turbo",
-    ],
-}
+from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP
 
 
 def get_models_for_provider(provider: str) -> gr.Dropdown:
@@ -70,7 +55,6 @@ def chat(
                 data = line[6:]
                 if data == "[DONE]":
                     break
-                import json
                 try:
                     chunk = json.loads(data)
                     delta = chunk["choices"][0]["delta"].get("content", "")

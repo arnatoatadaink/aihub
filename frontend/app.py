@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 import gradio as gr
 
 from frontend.tabs.playground import build_playground_tab
+from frontend.tabs.rag import build_rag_tab
+from frontend.tabs.evals import build_evals_tab
+from frontend.tabs.training import build_training_tab
+from frontend.tabs.media import build_media_tab
 from frontend.tabs.settings import build_settings_tab
 
 load_dotenv()
@@ -18,6 +22,10 @@ def build_app() -> gr.Blocks:
             """
         )
         build_playground_tab()
+        build_rag_tab()
+        build_evals_tab()
+        build_training_tab()
+        build_media_tab()
         build_settings_tab()
 
     return app
