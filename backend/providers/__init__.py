@@ -3,12 +3,20 @@ from .gemini import GeminiProvider
 from .openai_prov import OpenAIProvider
 from .anthropic_prov import AnthropicProvider
 from .voicevox import VoiceVoxProvider
+from .imagen import ImagenProvider
+from .dalle import DallEProvider
+from .veo import VeoProvider
+from .musicfx import MusicFXProvider
 
 PROVIDER_MAP = {
     "gemini": GeminiProvider,
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
     "voicevox": VoiceVoxProvider,
+    "imagen": ImagenProvider,
+    "dalle": DallEProvider,
+    "veo": VeoProvider,
+    "musicfx": MusicFXProvider,
 }
 
 __all__ = [
@@ -17,5 +25,9 @@ __all__ = [
     "OpenAIProvider",
     "AnthropicProvider",
     "VoiceVoxProvider",
+    "ImagenProvider",
+    "DallEProvider",
+    "VeoProvider",
+    "MusicFXProvider",
     "PROVIDER_MAP",
 ]
