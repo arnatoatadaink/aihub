@@ -35,6 +35,20 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: celery -A backend.worker worker --loglevel=info --concurrency=1
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+    restart: unless-stopped
+
   voicevox:
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     ports:
