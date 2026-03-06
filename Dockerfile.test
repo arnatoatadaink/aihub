@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-test.txt .
+RUN pip install --no-cache-dir -r requirements-test.txt
+
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+COPY templates/ ./templates/
+COPY tests/ ./tests/
+COPY pyproject.toml .
+
+ENV PYTHONPATH=/app
+
+CMD ["pytest", "tests/", "-v", "--tb=short"]
