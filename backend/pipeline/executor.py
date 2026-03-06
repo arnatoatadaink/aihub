@@ -110,14 +110,44 @@ def _get_provider(provider_key: str):
 
 
 # ---------------------------------------------------------------------------
+# Multimodal helpers
+# ---------------------------------------------------------------------------
+
+def _content_to_text(value: str | list) -> str:
+    """Extract plain text from a string or OpenAI-style content list."""
+    if isinstance(value, str):
+        return value
+    return "\n".join(
+        p.get("text", "") for p in value
+        if isinstance(p, dict) and p.get("type") == "text"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Template rendering
 # ---------------------------------------------------------------------------
 
-def _render(template: str, context: dict[str, str]) -> str:
-    """Replace {{key}} placeholders with values from context."""
+def _render(template: str, context: dict[str, str | list]) -> str | list:
+    """Replace {{key}} placeholders with values from context.
+
+    If the template is a single bare placeholder (e.g. "{{input}}") and the
+    corresponding context value is a list (multimodal content), the list is
+    returned directly so vision-capable providers receive it unchanged.
+    """
+    # Fast path: single placeholder referencing a list value
+    stripped = template.strip()
+    m = re.fullmatch(r"\{\{([^}]+)\}\}", stripped)
+    if m:
+        key = m.group(1).strip()
+        val = context.get(key)
+        if isinstance(val, list):
+            return val  # pass multipart content through unchanged
+
+    # Normal string rendering (stringify lists when embedded in text)
     def replace(match: re.Match) -> str:
         key = match.group(1).strip()
-        return context.get(key, match.group(0))  # keep original if key not found
+        val = context.get(key, match.group(0))
+        return _content_to_text(val) if isinstance(val, list) else val
 
     return re.sub(r"\{\{([^}]+)\}\}", replace, template)
 
@@ -129,8 +159,11 @@ def _render(template: str, context: dict[str, str]) -> str:
 class PipelineExecutor:
     """Execute a pipeline definition step by step."""
 
-    async def run(self, definition: dict, user_input: str) -> list[dict]:
+    async def run(self, definition: dict, user_input: str | list) -> list[dict]:
         """Run all steps and return per-step results.
+
+        Args:
+            user_input: Plain string or OpenAI-style content list (multimodal).
 
         Returns:
             list of dicts:
@@ -140,7 +173,7 @@ class PipelineExecutor:
                 "step_name":  str,
                 "provider":   str,
                 "model":      str,
-                "input":      str,    # rendered input sent to the LLM
+                "input":      str,    # rendered input sent to the LLM (serialised)
                 "output":     str,    # LLM response
                 "error":      str | None
               }
@@ -148,7 +181,8 @@ class PipelineExecutor:
         steps = definition.get("steps", [])
         results: list[dict] = []
         # context for template rendering: step outputs by id + aliases
-        context: dict[str, str] = {"input": user_input}
+        # Values may be str (text) or list (multimodal content)
+        context: dict[str, str | list] = {"input": user_input}
 
         for idx, step in enumerate(steps):
             step_id = step.get("id", f"step{idx}")
@@ -172,7 +206,11 @@ class PipelineExecutor:
                 "step_name": step_name,
                 "provider": provider_key,
                 "model": model,
-                "input": rendered_input,
+                # Serialise list content to JSON string for display
+                "input": (
+                    rendered_input if isinstance(rendered_input, str)
+                    else json.dumps(rendered_input, ensure_ascii=False)
+                ),
                 "output": "",
                 "error": None,
             }
@@ -182,14 +220,23 @@ class PipelineExecutor:
                 messages: list[dict] = []
                 if system_prompt.strip():
                     messages.append({"role": "system", "content": system_prompt})
+                # rendered_input may be str or list; providers handle both
                 messages.append({"role": "user", "content": rendered_input})
 
                 output = await provider.generate(messages, params)
                 result["output"] = output
 
-                # Update context for downstream steps
-                context[f"step:{step_id}"] = output
-                context["prev_output"] = output
+                # Wrap image/video generation outputs as image_url content so
+                # downstream vision steps can consume them directly
+                if getattr(provider, "modal_type", "text") == "image" and output:
+                    context_value: str | list = [
+                        {"type": "image_url", "image_url": {"url": output}}
+                    ]
+                else:
+                    context_value = output
+
+                context[f"step:{step_id}"] = context_value
+                context["prev_output"] = context_value
 
             except Exception as exc:
                 result["error"] = str(exc)
@@ -203,5 +250,5 @@ class PipelineExecutor:
 
 
 # Module-level convenience function
-async def run_pipeline(definition: dict, user_input: str) -> list[dict]:
+async def run_pipeline(definition: dict, user_input: str | list) -> list[dict]:
     return await PipelineExecutor().run(definition, user_input)

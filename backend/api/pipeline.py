@@ -36,6 +36,7 @@ class PipelineStep(BaseModel):
     system_prompt: str = ""
     input_template: str = ""
     params: dict = Field(default_factory=dict)
+    step_type: str = "text"  # "text" | "vision" | "image" | "video" | "audio"
 
 
 class PipelineDefinition(BaseModel):
@@ -45,8 +46,15 @@ class PipelineDefinition(BaseModel):
     steps: list[PipelineStep] = Field(default_factory=list)
 
 
+class MultimodalContent(BaseModel):
+    type: str  # "text" | "image_url"
+    text: str | None = None
+    image_url: dict | None = None  # {"url": "data:image/png;base64,..."}
+
+
 class PipelineRunRequest(BaseModel):
-    input: str
+    input: str = ""
+    input_parts: list[MultimodalContent] | None = None  # multimodal input (takes precedence over input)
     definition: PipelineDefinition | None = None  # for inline (unsaved) pipelines
 
 
@@ -92,7 +100,10 @@ async def run_inline_pipeline(body: PipelineRunRequest):
         raise HTTPException(status_code=400, detail="definition is required for inline runs")
     definition = body.definition.model_dump()
     try:
-        results = await run_pipeline(definition, body.input)
+        effective_input: str | list = body.input
+        if body.input_parts:
+            effective_input = [p.model_dump(exclude_none=True) for p in body.input_parts]
+        results = await run_pipeline(definition, effective_input)
         return {"results": results, "final_output": results[-1]["output"] if results else ""}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -108,7 +119,10 @@ async def run_saved_pipeline(pipeline_id: str, body: PipelineRunRequest):
     if body.definition is not None:
         definition = body.definition.model_dump()
     try:
-        results = await run_pipeline(definition, body.input)
+        effective_input: str | list = body.input
+        if body.input_parts:
+            effective_input = [p.model_dump(exclude_none=True) for p in body.input_parts]
+        results = await run_pipeline(definition, effective_input)
         return {
             "pipeline_id": pipeline_id,
             "results": results,

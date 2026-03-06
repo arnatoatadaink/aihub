@@ -29,7 +29,10 @@ class DallEProvider(BaseProvider):
     async def generate(self, messages: list, params: dict) -> str:
         """Generate an image and return the URL."""
         client = self._get_client()
-        prompt = messages[-1].get("content", "") if messages else ""
+        raw = messages[-1].get("content", "") if messages else ""
+        prompt = raw if isinstance(raw, str) else "\n".join(
+            p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text"
+        )
         model = params.get("model", "dall-e-3")
         size = params.get("size", "1024x1024")
         quality = params.get("quality", "standard")

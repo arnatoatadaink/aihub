@@ -24,6 +24,20 @@ PROVIDER_MODEL_MAP: dict[str, list[str]] = {
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
     ],
+    "imagen": [
+        "imagen-3.0-generate-002",
+        "imagen-3.0-fast-generate-001",
+    ],
+    "dalle": [
+        "dall-e-3",
+        "dall-e-2",
+    ],
+    "veo": [
+        "veo-2.0-generate-001",
+    ],
+    "musicfx": [
+        "musicfx",
+    ],
 }
 
 

@@ -32,7 +32,10 @@ class VeoProvider(BaseProvider):
         """Submit video generation and poll until complete. Returns video URI."""
         import google.generativeai as genai
 
-        prompt = messages[-1].get("content", "") if messages else ""
+        raw = messages[-1].get("content", "") if messages else ""
+        prompt = raw if isinstance(raw, str) else "\n".join(
+            p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text"
+        )
         model_name = params.get("model", AVAILABLE_MODELS[0])
 
         client = genai.Client(api_key=self.api_key)
