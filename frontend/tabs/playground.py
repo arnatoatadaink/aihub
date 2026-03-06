@@ -3,10 +3,17 @@
 Supports built-in providers (gemini / openai / anthropic) and any registered
 custom providers.  Use the "Refresh Providers" button to load newly registered
 custom providers into the Provider dropdown.
+
+Multimodal support:
+- Vision: attach an image (jpeg/png/webp/gif) to be sent alongside the message.
+- STT: record audio or upload a file; transcription is fetched from the backend
+  and pasted into the text input before sending.
 """
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from typing import Generator
 
 import gradio as gr
@@ -39,11 +46,65 @@ def get_models_for_provider(provider: str, provider_map: dict) -> gr.Dropdown:
 
 
 # ---------------------------------------------------------------------------
+# Vision helper
+# ---------------------------------------------------------------------------
+
+# Providers that support vision input
+VISION_PROVIDERS = {"gemini", "openai", "anthropic"}
+
+def _image_to_data_url(filepath: str) -> str | None:
+    """Read an image file and return a data URL (base64-encoded)."""
+    if not filepath:
+        return None
+    mime, _ = mimetypes.guess_type(filepath)
+    if not mime or not mime.startswith("image/"):
+        mime = "image/png"
+    with open(filepath, "rb") as f:
+        data = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:{mime};base64,{data}"
+
+
+def _build_user_content(text: str, image_path: str | None) -> str | list:
+    """Return str content or multipart list if an image is attached."""
+    if not image_path:
+        return text
+    data_url = _image_to_data_url(image_path)
+    if not data_url:
+        return text
+    parts: list = []
+    if text.strip():
+        parts.append({"type": "text", "text": text})
+    parts.append({"type": "image_url", "image_url": {"url": data_url}})
+    return parts
+
+
+# ---------------------------------------------------------------------------
+# STT helper
+# ---------------------------------------------------------------------------
+
+def transcribe_audio(audio_path: str) -> str:
+    """Call backend STT endpoint and return transcription text."""
+    if not audio_path:
+        return ""
+    try:
+        with open(audio_path, "rb") as f:
+            resp = httpx.post(
+                f"{BACKEND_URL}/v1/audio/transcriptions",
+                files={"file": (audio_path, f)},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            return resp.json().get("text", "")
+    except Exception as e:
+        return f"[STT Error: {e}]"
+
+
+# ---------------------------------------------------------------------------
 # Chat streaming
 # ---------------------------------------------------------------------------
 
 def chat(
-    message: str,
+    message: str | list,
     history: list,
     provider: str,
     model: str,
@@ -109,7 +170,9 @@ def build_playground_tab() -> gr.Tab:
 
         with gr.Row():
             with gr.Column(scale=3):
-                chatbot = gr.Chatbot(height=500, label="Chat")
+                chatbot = gr.Chatbot(height=460, label="Chat")
+
+                # ── Text input row ─────────────────────────────────────
                 with gr.Row():
                     msg_input = gr.Textbox(
                         placeholder="メッセージを入力...",
@@ -117,6 +180,30 @@ def build_playground_tab() -> gr.Tab:
                         scale=9,
                     )
                     send_btn = gr.Button("Send", variant="primary", scale=1)
+
+                # ── Vision: image upload (accordion) ──────────────────
+                with gr.Accordion("画像を添付（Vision）", open=False):
+                    image_input = gr.Image(
+                        label="画像ファイル（jpeg / png / webp / gif）",
+                        type="filepath",
+                        sources=["upload", "clipboard"],
+                    )
+                    gr.Markdown(
+                        "_Vision対応モデル: Gemini全モデル / gpt-4o系 / Claude Sonnet・Opus_"
+                    )
+
+                # ── STT: audio input (accordion) ───────────────────────
+                with gr.Accordion("音声入力（STT）", open=False):
+                    audio_input = gr.Audio(
+                        label="マイク録音 または 音声ファイルをアップロード",
+                        sources=["microphone", "upload"],
+                        type="filepath",
+                    )
+                    with gr.Row():
+                        transcribe_btn = gr.Button("文字起こし", scale=2)
+                        stt_status = gr.Textbox(
+                            label="", placeholder="ステータス", interactive=False, scale=8
+                        )
 
             with gr.Column(scale=1):
                 gr.Markdown("### Parameters")
@@ -185,37 +272,59 @@ def build_playground_tab() -> gr.Tab:
             outputs=model,
         )
 
-        # Chat submit / send
-        def user_submit(message, history):
-            return "", history + [[message, None]]
+        # STT: transcribe audio → paste into text input
+        def _do_transcribe(audio_path: str):
+            if not audio_path:
+                return gr.update(), "音声ファイルを選択してください"
+            text = transcribe_audio(audio_path)
+            if text.startswith("[STT Error"):
+                return gr.update(), text
+            return gr.update(value=text), f"文字起こし完了（{len(text)}文字）"
 
-        def bot_respond(history, provider, model, system_prompt, temperature, max_tokens, top_p):
-            user_msg = history[-1][0]
+        transcribe_btn.click(
+            fn=_do_transcribe,
+            inputs=[audio_input],
+            outputs=[msg_input, stt_status],
+        )
+
+        # Chat submit / send  (now passes image_path through)
+        def user_submit(message: str, image_path: str | None, history: list):
+            content = _build_user_content(message, image_path)
+            # Display text in chatbot (image preview is shown as "[画像添付]" label)
+            display_text = message if isinstance(content, str) else f"[画像添付] {message}".strip()
+            return "", None, history + [[display_text, None]], content
+
+        # pending_content holds the actual content (str or list) to be sent
+        pending_content = gr.State(value=None)
+
+        def bot_respond(
+            history, pending, prov, mod, sys_prompt, temp, max_tok, tp
+        ):
+            content = pending if pending is not None else (history[-1][0] if history else "")
             history[-1][1] = ""
             for partial in chat(
-                user_msg, history[:-1], provider, model,
-                system_prompt, temperature, max_tokens, top_p,
+                content, history[:-1], prov, mod, sys_prompt, temp, max_tok, tp
             ):
                 history[-1][1] = partial
                 yield history
 
         msg_input.submit(
             fn=user_submit,
-            inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot],
+            inputs=[msg_input, image_input, chatbot],
+            outputs=[msg_input, image_input, chatbot, pending_content],
         ).then(
             fn=bot_respond,
-            inputs=[chatbot, provider, model, system_prompt, temperature, max_tokens, top_p],
+            inputs=[chatbot, pending_content, provider, model, system_prompt, temperature, max_tokens, top_p],
             outputs=chatbot,
         )
 
         send_btn.click(
             fn=user_submit,
-            inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot],
+            inputs=[msg_input, image_input, chatbot],
+            outputs=[msg_input, image_input, chatbot, pending_content],
         ).then(
             fn=bot_respond,
-            inputs=[chatbot, provider, model, system_prompt, temperature, max_tokens, top_p],
+            inputs=[chatbot, pending_content, provider, model, system_prompt, temperature, max_tokens, top_p],
             outputs=chatbot,
         )
 

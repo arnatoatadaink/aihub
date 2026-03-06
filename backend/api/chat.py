@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Union
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -11,9 +11,15 @@ from backend.providers import PROVIDER_MAP
 router = APIRouter()
 
 
+class ContentPart(BaseModel):
+    type: str  # "text" | "image_url"
+    text: str | None = None
+    image_url: dict | None = None  # {"url": "data:image/...;base64,..."}
+
+
 class Message(BaseModel):
     role: str
-    content: str
+    content: Union[str, list[ContentPart]]
 
 
 class ChatCompletionRequest(BaseModel):

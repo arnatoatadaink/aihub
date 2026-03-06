@@ -1,3 +1,4 @@
+import base64
 import os
 from typing import AsyncGenerator
 
@@ -11,6 +12,41 @@ AVAILABLE_MODELS = [
 ]
 
 
+def _extract_b64_data(data_url: str) -> tuple[str, str]:
+    """Parse 'data:<mime>;base64,<data>' → (mime_type, b64_data)."""
+    # data_url format: "data:image/png;base64,iVBOR..."
+    header, data = data_url.split(",", 1)
+    mime_type = header.split(":")[1].split(";")[0]
+    return mime_type, data
+
+
+def _content_to_parts(content) -> list:
+    """Convert OpenAI-style content (str or list) to Gemini parts."""
+    if isinstance(content, str):
+        return [{"text": content}]
+    parts = []
+    for part in content:
+        if isinstance(part, dict):
+            ptype = part.get("type", "text")
+            if ptype == "text":
+                parts.append({"text": part.get("text", "")})
+            elif ptype == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                if url.startswith("data:"):
+                    mime_type, b64_data = _extract_b64_data(url)
+                    parts.append({"inline_data": {"mime_type": mime_type, "data": b64_data}})
+        else:
+            # Pydantic ContentPart object
+            if part.type == "text":
+                parts.append({"text": part.text or ""})
+            elif part.type == "image_url" and part.image_url:
+                url = part.image_url.get("url", "")
+                if url.startswith("data:"):
+                    mime_type, b64_data = _extract_b64_data(url)
+                    parts.append({"inline_data": {"mime_type": mime_type, "data": b64_data}})
+    return parts
+
+
 class GeminiProvider(BaseProvider):
     modal_type: str = "text"
 
@@ -21,18 +57,24 @@ class GeminiProvider(BaseProvider):
             genai.configure(api_key=self.api_key)
 
     def _build_contents(self, messages: list) -> tuple[str | None, list]:
-        """Convert OpenAI-style messages to Gemini contents format."""
+        """Convert OpenAI-style messages to Gemini contents format.
+
+        Supports both plain text and multipart content (text + images).
+        """
         system_prompt = None
         contents = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
-                system_prompt = content
+                # system must be plain text
+                system_prompt = content if isinstance(content, str) else ""
             elif role == "assistant":
-                contents.append({"role": "model", "parts": [{"text": content}]})
+                parts = _content_to_parts(content)
+                contents.append({"role": "model", "parts": parts})
             else:
-                contents.append({"role": "user", "parts": [{"text": content}]})
+                parts = _content_to_parts(content)
+                contents.append({"role": "user", "parts": parts})
         return system_prompt, contents
 
     async def generate(self, messages: list, params: dict) -> str:

@@ -280,3 +280,143 @@ class TestMusicFXProvider:
     def test_modal_type_is_audio(self):
         from backend.providers.musicfx import MusicFXProvider
         assert MusicFXProvider().modal_type == "audio"
+
+
+# ---------------------------------------------------------------------------
+# Vision: _content_to_parts (GeminiProvider)
+# ---------------------------------------------------------------------------
+
+class TestGeminiVision:
+    def setup_method(self):
+        sys.modules.pop("backend.providers.gemini", None)
+
+    def test_plain_text_content(self):
+        _install_fake_genai()
+        from backend.providers.gemini import _content_to_parts
+        parts = _content_to_parts("hello")
+        assert parts == [{"text": "hello"}]
+
+    def test_multipart_text_and_image(self):
+        _install_fake_genai()
+        from backend.providers.gemini import _content_to_parts
+        content = [
+            {"type": "text", "text": "describe this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+        ]
+        parts = _content_to_parts(content)
+        assert parts[0] == {"text": "describe this"}
+        assert parts[1] == {"inline_data": {"mime_type": "image/png", "data": "abc123"}}
+
+    def test_build_contents_with_image(self):
+        _install_fake_genai()
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-key"}):
+            from backend.providers.gemini import GeminiProvider
+            provider = GeminiProvider()
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is this?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/"}},
+                    ],
+                }
+            ]
+            system, contents = provider._build_contents(messages)
+            assert system is None
+            assert len(contents) == 1
+            assert contents[0]["role"] == "user"
+            assert len(contents[0]["parts"]) == 2
+            assert contents[0]["parts"][1]["inline_data"]["mime_type"] == "image/jpeg"
+
+
+# ---------------------------------------------------------------------------
+# Vision: _convert_content (AnthropicProvider)
+# ---------------------------------------------------------------------------
+
+class TestAnthropicVision:
+    def test_plain_string_passthrough(self):
+        from backend.providers.anthropic_prov import AnthropicProvider
+        result = AnthropicProvider._convert_content("hello")
+        assert result == "hello"
+
+    def test_multipart_text_and_image(self):
+        from backend.providers.anthropic_prov import AnthropicProvider
+        content = [
+            {"type": "text", "text": "describe this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
+        ]
+        result = AnthropicProvider._convert_content(content)
+        assert result[0] == {"type": "text", "text": "describe this"}
+        assert result[1] == {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "abc123"},
+        }
+
+
+# ---------------------------------------------------------------------------
+# Vision: _normalize_messages (OpenAIProvider)
+# ---------------------------------------------------------------------------
+
+class TestOpenAIVision:
+    def test_plain_string_unchanged(self):
+        from backend.providers.openai_prov import _normalize_messages
+        msgs = [{"role": "user", "content": "hello"}]
+        assert _normalize_messages(msgs) == msgs
+
+    def test_list_content_normalized(self):
+        from backend.providers.openai_prov import _normalize_messages
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+        result = _normalize_messages(msgs)
+        assert result[0]["content"][0] == {"type": "text", "text": "look at this"}
+        assert result[0]["content"][1]["type"] == "image_url"
+
+
+# ---------------------------------------------------------------------------
+# STT: WhisperProvider
+# ---------------------------------------------------------------------------
+
+class TestWhisperProvider:
+    def test_is_available_false_when_no_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            import importlib
+            import backend.providers.whisper as mod
+            importlib.reload(mod)
+            provider = mod.WhisperProvider()
+            provider.api_key = ""
+            assert provider.is_available() is False
+
+    def test_is_available_true_when_key_set(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
+            import importlib
+            import backend.providers.whisper as mod
+            importlib.reload(mod)
+            provider = mod.WhisperProvider()
+            assert provider.is_available() is True
+
+    def test_transcribe_calls_openai(self, tmp_path):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"RIFF" + b"\x00" * 36)  # minimal fake WAV
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}):
+            with patch("openai.OpenAI") as mock_cls:
+                mock_client = MagicMock()
+                mock_cls.return_value = mock_client
+                mock_response = MagicMock()
+                mock_response.text = "こんにちは"
+                mock_client.audio.transcriptions.create.return_value = mock_response
+
+                import importlib
+                import backend.providers.whisper as mod
+                importlib.reload(mod)
+                provider = mod.WhisperProvider()
+                result = provider.transcribe(str(wav_file))
+                assert result == "こんにちは"
+                mock_client.audio.transcriptions.create.assert_called_once()
