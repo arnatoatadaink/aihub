@@ -45,6 +45,16 @@ def api_post(path: str, payload: dict | None = None, timeout: int = 60, **kwargs
         return {"error": str(e)}
 
 
+def fetch_all_providers() -> dict[str, list[str]]:
+    """Return provider→models map including saved custom providers."""
+    result = {**PROVIDER_MODEL_MAP}
+    custom = api_get("/v1/custom_providers")
+    for p in custom.get("providers", []):
+        pid = p["id"]
+        result[pid] = p.get("models", []) or ["default"]
+    return result
+
+
 def api_delete(path: str, timeout: int = 15) -> dict:
     try:
         resp = httpx.delete(f"{BACKEND_URL}{path}", timeout=timeout)

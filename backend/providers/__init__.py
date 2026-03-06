@@ -7,6 +7,7 @@ from .imagen import ImagenProvider
 from .dalle import DallEProvider
 from .veo import VeoProvider
 from .musicfx import MusicFXProvider
+from .custom import CustomProvider, build_custom_provider
 
 PROVIDER_MAP = {
     "gemini": GeminiProvider,
@@ -29,5 +30,7 @@ __all__ = [
     "DallEProvider",
     "VeoProvider",
     "MusicFXProvider",
+    "CustomProvider",
+    "build_custom_provider",
     "PROVIDER_MAP",
 ]
