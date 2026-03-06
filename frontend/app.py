@@ -10,15 +10,16 @@ from frontend.tabs.training import build_training_tab
 from frontend.tabs.media import build_media_tab
 from frontend.tabs.pipeline import build_pipeline_tab
 from frontend.tabs.settings import build_settings_tab
+from frontend.version import APP_VERSION
 
 load_dotenv()
 
 
 def build_app() -> gr.Blocks:
-    with gr.Blocks(title="AI Hub", theme=gr.themes.Soft()) as app:
+    with gr.Blocks(title=f"AI Hub v{APP_VERSION}", theme=gr.themes.Soft()) as app:
         gr.Markdown(
-            """
-            # AI Hub
+            f"""
+            # AI Hub &nbsp; <sub>`v{APP_VERSION}`</sub>
             Unified interface for Google Gemini, OpenAI GPT-4o, Anthropic Claude, and more.
             """
         )
