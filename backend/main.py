@@ -12,6 +12,7 @@ from backend.api.jobs import router as jobs_router
 from backend.api.media import router as media_router
 from backend.api.custom_providers import router as custom_providers_router
 from backend.api.pipeline import router as pipeline_router
+from backend.api.stt import router as stt_router
 
 load_dotenv()
 
@@ -37,6 +38,7 @@ app.include_router(jobs_router)
 app.include_router(media_router)
 app.include_router(custom_providers_router)
 app.include_router(pipeline_router)
+app.include_router(stt_router)
 
 
 @app.get("/health")
