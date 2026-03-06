@@ -1,8 +1,8 @@
-"""Pipeline tab — build and run multi-step LLM pipelines.
+"""Pipeline tab — form-based multi-step LLM pipeline builder.
 
-UI layout:
-  Left  : Pipeline builder (up to 5 steps via form + JSON editor)
-  Right : Run panel — input text → step-by-step results
+Each step is configured via GUI controls (no JSON editing required).
+Up to MAX_STEPS steps can be added / removed dynamically.
+A collapsible JSON preview shows the generated definition for power users.
 """
 from __future__ import annotations
 
@@ -10,41 +10,39 @@ import json
 
 import gradio as gr
 
-from frontend.utils import BACKEND_URL, api_get, api_post
+from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP, api_delete, api_get, api_post
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+MAX_STEPS = 5
 
-_EXAMPLE_PIPELINE = {
-    "name": "翻訳→要約パイプライン",
-    "description": "日本語を英語に翻訳してから3行で要約します",
-    "steps": [
-        {
-            "id": "translate",
-            "name": "翻訳",
-            "provider": "gemini",
-            "model": "gemini-2.0-flash",
-            "system_prompt": "あなたは翻訳者です。入力を英語に翻訳してください。翻訳文のみを返してください。",
-            "input_template": "{{input}}",
-            "params": {"temperature": 0.2, "max_tokens": 2048},
-        },
-        {
-            "id": "summarize",
-            "name": "要約",
-            "provider": "gemini",
-            "model": "gemini-2.0-flash",
-            "system_prompt": "Summarize the following text in 3 concise bullet points.",
-            "input_template": "{{prev_output}}",
-            "params": {"temperature": 0.5, "max_tokens": 512},
-        },
-    ],
-}
+_BUILTIN_PROVIDERS = list(PROVIDER_MODEL_MAP.keys())  # ["gemini", "openai", "anthropic"]
 
-_TEMPLATE_PRESETS = {
-    "翻訳→要約": _EXAMPLE_PIPELINE,
-    "添削→フォーマット": {
-        "name": "添削→フォーマットパイプライン",
+_PRESETS: dict[str, dict] = {
+    "翻訳→要約": {
+        "name": "翻訳→要約パイプライン",
+        "description": "日本語を英語に翻訳してから3行で要約します",
+        "steps": [
+            {
+                "id": "translate",
+                "name": "翻訳",
+                "provider": "gemini",
+                "model": "gemini-2.0-flash",
+                "system_prompt": "あなたは翻訳者です。入力を英語に翻訳してください。翻訳文のみを返してください。",
+                "input_template": "{{input}}",
+                "params": {"temperature": 0.2, "max_tokens": 2048},
+            },
+            {
+                "id": "summarize",
+                "name": "要約",
+                "provider": "gemini",
+                "model": "gemini-2.0-flash",
+                "system_prompt": "Summarize the following text in 3 concise bullet points.",
+                "input_template": "{{prev_output}}",
+                "params": {"temperature": 0.5, "max_tokens": 512},
+            },
+        ],
+    },
+    "添削→箇条書き": {
+        "name": "添削→箇条書きパイプライン",
         "description": "文章を校正してから箇条書きに整形します",
         "steps": [
             {
@@ -93,22 +91,86 @@ _TEMPLATE_PRESETS = {
     },
 }
 
+_FIELDS_PER_STEP = 7  # name, provider, model, system_prompt, input_template, temperature, max_tokens
+
+
+# ---------------------------------------------------------------------------
+# Data helpers
+# ---------------------------------------------------------------------------
+
+def _get_all_provider_ids() -> list[str]:
+    """Built-in providers + registered custom provider IDs."""
+    ids = list(_BUILTIN_PROVIDERS)
+    result = api_get("/v1/custom_providers")
+    for p in result.get("providers", []):
+        ids.append(p["id"])
+    return ids
+
+
+def _build_definition(name: str, desc: str, count: int, *flat_fields) -> dict:
+    """Construct a pipeline definition dict from flattened form field values."""
+    steps = []
+    for i in range(int(count)):
+        b = i * _FIELDS_PER_STEP
+        default_template = "{{input}}" if i == 0 else "{{prev_output}}"
+        steps.append({
+            "id": f"step{i + 1}",
+            "name": flat_fields[b] or f"Step {i + 1}",
+            "provider": flat_fields[b + 1] or "gemini",
+            "model": flat_fields[b + 2] or "",
+            "system_prompt": flat_fields[b + 3] or "",
+            "input_template": flat_fields[b + 4] or default_template,
+            "params": {
+                "temperature": float(flat_fields[b + 5] or 0.7),
+                "max_tokens": int(flat_fields[b + 6] or 2048),
+            },
+        })
+    return {"name": name or "My Pipeline", "description": desc or "", "steps": steps}
+
+
+def _definition_to_form(defn: dict) -> list:
+    """Unpack a pipeline definition dict into the flat list of form values.
+
+    Returns: [pipeline_name, pipeline_desc, step_count]
+              + [7 fields × MAX_STEPS]
+              + [gr.update(visible=...) × MAX_STEPS]
+    """
+    steps = (defn.get("steps") or [])[:MAX_STEPS]
+    count = max(len(steps), 1)
+    out: list = [defn.get("name", ""), defn.get("description", ""), count]
+    for i in range(MAX_STEPS):
+        default_template = "{{input}}" if i == 0 else "{{prev_output}}"
+        if i < len(steps):
+            s = steps[i]
+            p = s.get("params", {})
+            out.extend([
+                s.get("name", f"Step {i + 1}"),
+                s.get("provider", "gemini"),
+                s.get("model", ""),
+                s.get("system_prompt", ""),
+                s.get("input_template") or default_template,
+                p.get("temperature", 0.7),
+                p.get("max_tokens", 2048),
+            ])
+        else:
+            out.extend([f"Step {i + 1}", "gemini", "", "", default_template, 0.7, 2048])
+    out.extend([gr.update(visible=i < count) for i in range(MAX_STEPS)])
+    return out
+
 
 def _format_step_results(results: list[dict]) -> str:
-    """Convert step results list to a readable markdown string."""
     lines = []
     for r in results:
-        status = "✅" if not r.get("error") else "❌"
-        lines.append(f"## {status} Step {r['step_index'] + 1}: {r['step_name']}")
-        lines.append(f"**Provider:** `{r['provider']}`  **Model:** `{r['model']}`")
+        icon = "✅" if not r.get("error") else "❌"
+        lines.append(f"### {icon} Step {r['step_index'] + 1}: {r['step_name']}")
+        lines.append(f"**Provider:** `{r['provider']}`　**Model:** `{r['model']}`")
         lines.append("")
-        lines.append("**Input sent to LLM:**")
+        lines.append("**LLMへの入力:**")
         lines.append(f"```\n{r['input']}\n```")
-        lines.append("")
         if r.get("error"):
-            lines.append(f"**Error:** {r['error']}")
+            lines.append(f"**エラー:** {r['error']}")
         else:
-            lines.append("**Output:**")
+            lines.append("**出力:**")
             lines.append(r["output"])
         lines.append("")
         lines.append("---")
@@ -117,186 +179,263 @@ def _format_step_results(results: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Action functions
-# ---------------------------------------------------------------------------
-
-def load_preset(preset_name: str) -> str:
-    preset = _TEMPLATE_PRESETS.get(preset_name, _EXAMPLE_PIPELINE)
-    return json.dumps(preset, indent=2, ensure_ascii=False)
-
-
-def load_saved_pipelines() -> tuple[list[str], str]:
-    result = api_get("/v1/pipelines")
-    pipelines = result.get("pipelines", [])
-    choices = [f"{p['id']} — {p['name']}" for p in pipelines]
-    if not choices:
-        return [], "保存済みパイプラインなし"
-    return choices, f"{len(choices)} 件のパイプラインが保存されています"
-
-
-def save_pipeline_action(pipeline_json: str) -> str:
-    try:
-        definition = json.loads(pipeline_json)
-    except json.JSONDecodeError as e:
-        return f"JSONパースエラー: {e}"
-    result = api_post("/v1/pipelines", definition)
-    if "error" in result:
-        return f"保存失敗: {result['error']}"
-    pid = result.get("pipeline", {}).get("id", "?")
-    return f"保存しました (ID: {pid})"
-
-
-def load_selected_pipeline(selection: str) -> str:
-    if not selection:
-        return ""
-    pipeline_id = selection.split(" — ")[0].strip()
-    result = api_get(f"/v1/pipelines/{pipeline_id}")
-    if "error" in result:
-        return f"// 取得失敗: {result['error']}"
-    return json.dumps(result.get("pipeline", {}), indent=2, ensure_ascii=False)
-
-
-def delete_selected_pipeline(selection: str) -> tuple[str, list[str], str]:
-    if not selection:
-        return "IDを選択してください", [], ""
-    pipeline_id = selection.split(" — ")[0].strip()
-    result = api_post(f"/v1/pipelines/{pipeline_id}", payload=None)
-    # use DELETE via httpx directly since api_post wraps POST
-    import httpx
-    try:
-        resp = httpx.delete(f"{BACKEND_URL}/v1/pipelines/{pipeline_id}", timeout=10)
-        resp.raise_for_status()
-        choices, msg = load_saved_pipelines()
-        return f"削除しました: {pipeline_id}", choices, msg
-    except Exception as e:
-        return f"削除失敗: {e}", [], ""
-
-
-def run_pipeline_action(pipeline_json: str, user_input: str) -> tuple[str, str, str]:
-    """Return (step_results_md, final_output, status)."""
-    if not user_input.strip():
-        return "", "", "入力テキストを入力してください"
-    try:
-        definition = json.loads(pipeline_json)
-    except json.JSONDecodeError as e:
-        return "", "", f"JSONパースエラー: {e}"
-
-    payload = {"input": user_input, "definition": definition}
-    result = api_post("/v1/pipelines/run", payload, timeout=120)
-
-    if "error" in result:
-        return "", "", f"実行エラー: {result['error']}"
-
-    results = result.get("results", [])
-    final = result.get("final_output", "")
-    step_md = _format_step_results(results)
-    status = f"✅ 完了 ({len(results)} ステップ)"
-    return step_md, final, status
-
-
-# ---------------------------------------------------------------------------
 # Tab builder
 # ---------------------------------------------------------------------------
 
 def build_pipeline_tab() -> gr.Tab:
     with gr.Tab("Pipeline") as tab:
-        gr.Markdown("## Pipeline — 複数プロバイダーを連結して処理")
         gr.Markdown(
-            "LLMのステップを直列に連結します。各ステップの出力を次のステップへ渡せます。  \n"
-            "`{{input}}` = 最初のユーザー入力 / `{{prev_output}}` = 直前ステップの出力 / "
+            "## Pipeline — 複数プロバイダーを連結して処理\n"
+            "ステップを順番に実行し、前のステップの出力を次のステップへ渡せます。  \n"
+            "`{{input}}` = 最初の入力　`{{prev_output}}` = 直前ステップの出力　"
             "`{{step:<id>}}` = 特定ステップの出力"
         )
 
+        step_count = gr.State(value=1)
+
+        # ── Pipeline metadata ──────────────────────────────────────────────
         with gr.Row():
-            # ----------------------------------------------------------------
-            # Left — Pipeline Builder
-            # ----------------------------------------------------------------
-            with gr.Column(scale=2):
-                gr.Markdown("### パイプライン定義 (JSON)")
+            pipeline_name = gr.Textbox(
+                label="パイプライン名", placeholder="My Pipeline", scale=3
+            )
+            pipeline_desc = gr.Textbox(label="説明", placeholder="何をするパイプラインか…", scale=4)
 
+        with gr.Row():
+            # ── Left: Step builder ─────────────────────────────────────────
+            with gr.Column(scale=3):
                 with gr.Row():
-                    preset_dropdown = gr.Dropdown(
-                        label="テンプレートから読み込む",
-                        choices=list(_TEMPLATE_PRESETS.keys()),
-                        value=None,
+                    gr.Markdown("### ステップ設定")
+                    refresh_prov_btn = gr.Button("🔄 プロバイダー更新", size="sm")
+                    prov_status = gr.Textbox(label="", interactive=False, scale=3)
+
+                # ── Step blocks (pre-created, shown/hidden via gr.Group) ───
+                step_groups: list[gr.Group] = []
+                step_comps: list[list] = []  # [name, provider, model, system, template, temp, tokens]
+
+                for i in range(MAX_STEPS):
+                    with gr.Group(visible=(i == 0)) as grp:
+                        with gr.Accordion(f"Step {i + 1}", open=True):
+                            with gr.Row():
+                                s_name = gr.Textbox(
+                                    label="ステップ名",
+                                    value=f"Step {i + 1}",
+                                    scale=2,
+                                )
+                                s_provider = gr.Dropdown(
+                                    label="プロバイダー",
+                                    choices=_BUILTIN_PROVIDERS,
+                                    value="gemini",
+                                    allow_custom_value=True,
+                                    scale=2,
+                                )
+                                s_model = gr.Textbox(
+                                    label="モデル",
+                                    placeholder="空欄=デフォルト (例: gemini-2.0-flash)",
+                                    scale=3,
+                                )
+                            s_system = gr.Textbox(
+                                label="システムプロンプト",
+                                placeholder="あなたは…",
+                                lines=3,
+                            )
+                            s_template = gr.Textbox(
+                                label="入力テンプレート",
+                                value="{{input}}" if i == 0 else "{{prev_output}}",
+                                info="変数: {{input}} / {{prev_output}} / {{step:<id>}}",
+                            )
+                            with gr.Row():
+                                s_temp = gr.Number(
+                                    label="Temperature",
+                                    value=0.7,
+                                    minimum=0.0,
+                                    maximum=2.0,
+                                    step=0.05,
+                                )
+                                s_tokens = gr.Number(
+                                    label="Max Tokens",
+                                    value=2048,
+                                    minimum=64,
+                                    maximum=32768,
+                                    step=64,
+                                )
+                    step_groups.append(grp)
+                    step_comps.append([s_name, s_provider, s_model, s_system, s_template, s_temp, s_tokens])
+
+                all_step_inputs: list = [c for cs in step_comps for c in cs]
+
+                # ── Add / Remove step ──────────────────────────────────────
+                with gr.Row():
+                    add_step_btn = gr.Button("＋ ステップ追加", size="sm")
+                    del_step_btn = gr.Button(
+                        "－ 最後のステップを削除", size="sm", variant="secondary"
                     )
-                    load_preset_btn = gr.Button("読み込む", size="sm")
 
-                pipeline_json = gr.Code(
-                    label="Pipeline JSON",
-                    language="json",
-                    value=json.dumps(_EXAMPLE_PIPELINE, indent=2, ensure_ascii=False),
-                    lines=25,
-                )
+                gr.Markdown("---")
 
+                # ── Presets & saved pipelines ─────────────────────────────
+                with gr.Accordion("プリセット / 保存済みパイプライン", open=False):
+                    gr.Markdown("**プリセット**")
+                    with gr.Row():
+                        preset_dd = gr.Dropdown(
+                            label="テンプレート",
+                            choices=list(_PRESETS.keys()),
+                            value=None,
+                            scale=3,
+                        )
+                        load_preset_btn = gr.Button("読み込む", size="sm", scale=1)
+
+                    gr.Markdown("**保存済みパイプライン**")
+                    with gr.Row():
+                        saved_dd = gr.Dropdown(
+                            label="一覧", choices=[], value=None, scale=4
+                        )
+                        refresh_saved_btn = gr.Button("🔄", size="sm", scale=1)
+                    with gr.Row():
+                        load_saved_btn = gr.Button("読み込む", size="sm")
+                        delete_saved_btn = gr.Button("削除", size="sm", variant="stop")
+                    saved_status = gr.Textbox(label="", interactive=False)
+
+                gr.Markdown("---")
+
+                # ── Save + JSON preview ───────────────────────────────────
                 with gr.Row():
-                    save_btn = gr.Button("保存", variant="primary")
+                    save_btn = gr.Button("💾 パイプラインを保存", variant="primary")
                     save_status = gr.Textbox(label="", interactive=False, scale=3)
 
-                gr.Markdown("#### 保存済みパイプライン")
-                with gr.Row():
-                    saved_list = gr.Dropdown(label="保存済み", choices=[], value=None, scale=3)
-                    refresh_btn = gr.Button("更新", size="sm")
+                with gr.Accordion("生成された JSON (プレビュー)", open=False):
+                    preview_btn = gr.Button("JSON を生成", size="sm")
+                    json_preview = gr.Code(
+                        label="",
+                        language="json",
+                        interactive=False,
+                        lines=12,
+                    )
 
-                with gr.Row():
-                    load_saved_btn = gr.Button("読み込む", size="sm")
-                    delete_saved_btn = gr.Button("削除", size="sm", variant="stop")
-
-                saved_status = gr.Textbox(label="", interactive=False)
-
-            # ----------------------------------------------------------------
-            # Right — Run Panel
-            # ----------------------------------------------------------------
-            with gr.Column(scale=3):
+            # ── Right: Run panel ───────────────────────────────────────────
+            with gr.Column(scale=2):
                 gr.Markdown("### 実行")
-
-                user_input = gr.Textbox(
+                user_input_box = gr.Textbox(
                     label="入力テキスト",
                     placeholder="パイプラインへの最初の入力を入力...",
-                    lines=5,
+                    lines=6,
                 )
-                run_btn = gr.Button("パイプライン実行", variant="primary")
+                run_btn = gr.Button("▶ パイプライン実行", variant="primary", size="lg")
                 run_status = gr.Textbox(label="ステータス", interactive=False)
 
                 gr.Markdown("#### 最終出力")
-                final_output = gr.Textbox(
-                    label="",
-                    interactive=False,
-                    lines=8,
-                )
+                final_output = gr.Textbox(label="", interactive=False, lines=8)
 
-                gr.Markdown("#### ステップ別結果")
+                gr.Markdown("#### ステップ別詳細")
                 step_results = gr.Markdown()
 
-        # ----------------------------------------------------------------
-        # Event wiring
-        # ----------------------------------------------------------------
-        load_preset_btn.click(fn=load_preset, inputs=preset_dropdown, outputs=pipeline_json)
+        # ── Common input sets ────────────────────────────────────────────────
+        builder_inputs = [pipeline_name, pipeline_desc, step_count] + all_step_inputs
+        form_outputs = [pipeline_name, pipeline_desc, step_count] + all_step_inputs + step_groups
+        provider_dropdowns = [cs[1] for cs in step_comps]
 
-        save_btn.click(fn=save_pipeline_action, inputs=pipeline_json, outputs=save_status)
+        # ── Event handlers ───────────────────────────────────────────────────
 
-        def _refresh():
-            choices, msg = load_saved_pipelines()
-            return gr.Dropdown(choices=choices, value=None), msg
+        # Refresh provider dropdowns in all step forms
+        def _refresh_providers():
+            ids = _get_all_provider_ids()
+            updates = [gr.update(choices=ids) for _ in range(MAX_STEPS)]
+            return [f"✅ {len(ids)} 件のプロバイダーを取得"] + updates
 
-        refresh_btn.click(fn=_refresh, outputs=[saved_list, saved_status])
-        tab.select(fn=_refresh, outputs=[saved_list, saved_status])
-
-        load_saved_btn.click(
-            fn=load_selected_pipeline, inputs=saved_list, outputs=pipeline_json
+        refresh_prov_btn.click(
+            fn=_refresh_providers,
+            outputs=[prov_status] + provider_dropdowns,
         )
 
-        def _delete(sel):
-            msg, choices, list_msg = delete_selected_pipeline(sel)
-            return msg, gr.Dropdown(choices=choices, value=None), list_msg
+        # Add / remove step
+        def _add(count):
+            new = min(int(count) + 1, MAX_STEPS)
+            return [new] + [gr.update(visible=i < new) for i in range(MAX_STEPS)]
 
+        def _remove(count):
+            new = max(int(count) - 1, 1)
+            return [new] + [gr.update(visible=i < new) for i in range(MAX_STEPS)]
+
+        add_step_btn.click(fn=_add, inputs=step_count, outputs=[step_count] + step_groups)
+        del_step_btn.click(fn=_remove, inputs=step_count, outputs=[step_count] + step_groups)
+
+        # Load preset into form
+        def _load_preset(name):
+            return _definition_to_form(_PRESETS.get(name, list(_PRESETS.values())[0]))
+
+        load_preset_btn.click(fn=_load_preset, inputs=preset_dd, outputs=form_outputs)
+
+        # Saved pipeline list management
+        def _refresh_saved():
+            r = api_get("/v1/pipelines")
+            choices = [f"{p['id']} — {p['name']}" for p in r.get("pipelines", [])]
+            msg = f"{len(choices)} 件の保存済みパイプライン" if choices else "保存済みパイプラインなし"
+            return gr.update(choices=choices, value=None), msg
+
+        def _load_saved(sel):
+            if not sel:
+                return _definition_to_form({})
+            pid = sel.split(" — ")[0].strip()
+            r = api_get(f"/v1/pipelines/{pid}")
+            if "error" in r:
+                return _definition_to_form({})
+            return _definition_to_form(r.get("pipeline", {}))
+
+        def _delete_saved(sel):
+            if not sel:
+                return "パイプラインを選択してください", gr.update(), ""
+            pid = sel.split(" — ")[0].strip()
+            api_delete(f"/v1/pipelines/{pid}")
+            dd_update, msg = _refresh_saved()
+            return f"削除しました: {pid}", dd_update, msg
+
+        refresh_saved_btn.click(fn=_refresh_saved, outputs=[saved_dd, saved_status])
+        tab.select(fn=_refresh_saved, outputs=[saved_dd, saved_status])
+        load_saved_btn.click(fn=_load_saved, inputs=saved_dd, outputs=form_outputs)
         delete_saved_btn.click(
-            fn=_delete, inputs=saved_list, outputs=[save_status, saved_list, saved_status]
+            fn=_delete_saved, inputs=saved_dd, outputs=[saved_status, saved_dd, saved_status]
         )
+
+        # Save pipeline
+        def _save(*all_args):
+            name, desc, count = all_args[0], all_args[1], all_args[2]
+            flat = all_args[3:]
+            defn = _build_definition(name, desc, count, *flat)
+            r = api_post("/v1/pipelines", defn)
+            if "error" in r:
+                return f"保存失敗: {r['error']}"
+            pid = r.get("pipeline", {}).get("id", "?")
+            return f"✅ 保存しました (ID: {pid})"
+
+        save_btn.click(fn=_save, inputs=builder_inputs, outputs=save_status)
+
+        # JSON preview
+        def _preview(*all_args):
+            name, desc, count = all_args[0], all_args[1], all_args[2]
+            flat = all_args[3:]
+            defn = _build_definition(name, desc, count, *flat)
+            return json.dumps(defn, indent=2, ensure_ascii=False)
+
+        preview_btn.click(fn=_preview, inputs=builder_inputs, outputs=json_preview)
+
+        # Run pipeline
+        def _run(*all_args):
+            name, desc, count = all_args[0], all_args[1], all_args[2]
+            flat = all_args[3:-1]
+            user_input = all_args[-1]
+            if not str(user_input).strip():
+                return "", "", "入力テキストを入力してください"
+            defn = _build_definition(name, desc, count, *flat)
+            payload = {"input": user_input, "definition": defn}
+            r = api_post("/v1/pipelines/run", payload, timeout=180)
+            if "error" in r:
+                return "", "", f"実行エラー: {r['error']}"
+            results = r.get("results", [])
+            final = r.get("final_output", "")
+            return _format_step_results(results), final, f"✅ 完了 ({len(results)} ステップ)"
 
         run_btn.click(
-            fn=run_pipeline_action,
-            inputs=[pipeline_json, user_input],
+            fn=_run,
+            inputs=builder_inputs + [user_input_box],
             outputs=[step_results, final_output, run_status],
         )
 

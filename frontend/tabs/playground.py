@@ -1,16 +1,46 @@
+"""Prompt Playground tab.
+
+Supports built-in providers (gemini / openai / anthropic) and any registered
+custom providers.  Use the "Refresh Providers" button to load newly registered
+custom providers into the Provider dropdown.
+"""
+from __future__ import annotations
+
 import json
 from typing import Generator
 
 import gradio as gr
 import httpx
 
-from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP
+from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP, api_get
 
 
-def get_models_for_provider(provider: str) -> gr.Dropdown:
-    models = PROVIDER_MODEL_MAP.get(provider, [])
-    return gr.Dropdown(choices=models, value=models[0] if models else None)
+# ---------------------------------------------------------------------------
+# Provider / model helpers
+# ---------------------------------------------------------------------------
 
+def _fetch_full_provider_map() -> dict[str, list[str]]:
+    """Return built-in + custom provider → model lists."""
+    full = dict(PROVIDER_MODEL_MAP)
+    result = api_get("/v1/custom_providers")
+    for p in result.get("providers", []):
+        pid = p["id"]
+        full[pid] = p.get("models") or ["default"]
+    return full
+
+
+def get_models_for_provider(provider: str, provider_map: dict) -> gr.Dropdown:
+    models = provider_map.get(provider, [])
+    return gr.Dropdown(
+        choices=models,
+        value=models[0] if models else None,
+        allow_custom_value=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat streaming
+# ---------------------------------------------------------------------------
 
 def chat(
     message: str,
@@ -66,9 +96,17 @@ def chat(
         yield f"Error: {e}"
 
 
+# ---------------------------------------------------------------------------
+# Tab builder
+# ---------------------------------------------------------------------------
+
 def build_playground_tab() -> gr.Tab:
     with gr.Tab("Playground") as tab:
         gr.Markdown("## Prompt Playground")
+
+        # State holds the full provider→models map (updated on refresh)
+        provider_map_state = gr.State(value=dict(PROVIDER_MODEL_MAP))
+
         with gr.Row():
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(height=500, label="Chat")
@@ -82,15 +120,22 @@ def build_playground_tab() -> gr.Tab:
 
             with gr.Column(scale=1):
                 gr.Markdown("### Parameters")
-                provider = gr.Dropdown(
-                    label="Provider",
-                    choices=list(PROVIDER_MODEL_MAP.keys()),
-                    value="gemini",
-                )
+
+                with gr.Row():
+                    provider = gr.Dropdown(
+                        label="Provider",
+                        choices=list(PROVIDER_MODEL_MAP.keys()),
+                        value="gemini",
+                        allow_custom_value=True,
+                        scale=4,
+                    )
+                    refresh_prov_btn = gr.Button("🔄", size="sm", scale=1)
+
                 model = gr.Dropdown(
                     label="Model",
                     choices=PROVIDER_MODEL_MAP["gemini"],
                     value="gemini-2.0-flash",
+                    allow_custom_value=True,
                 )
                 system_prompt = gr.Textbox(
                     label="System Prompt",
@@ -108,8 +153,39 @@ def build_playground_tab() -> gr.Tab:
                 )
                 clear_btn = gr.Button("Clear Chat")
 
-        provider.change(fn=get_models_for_provider, inputs=provider, outputs=model)
+        # ── Event handlers ───────────────────────────────────────────────
 
+        # Refresh providers (load custom providers from backend)
+        def _refresh_providers():
+            full_map = _fetch_full_provider_map()
+            provider_ids = list(full_map.keys())
+            return (
+                full_map,
+                gr.update(choices=provider_ids),
+            )
+
+        refresh_prov_btn.click(
+            fn=_refresh_providers,
+            outputs=[provider_map_state, provider],
+        )
+
+        # Also refresh on tab select so custom providers are visible immediately
+        tab.select(
+            fn=_refresh_providers,
+            outputs=[provider_map_state, provider],
+        )
+
+        # Update model list when provider changes
+        def _on_provider_change(prov, pmap):
+            return get_models_for_provider(prov, pmap)
+
+        provider.change(
+            fn=_on_provider_change,
+            inputs=[provider, provider_map_state],
+            outputs=model,
+        )
+
+        # Chat submit / send
         def user_submit(message, history):
             return "", history + [[message, None]]
 
@@ -118,7 +194,7 @@ def build_playground_tab() -> gr.Tab:
             history[-1][1] = ""
             for partial in chat(
                 user_msg, history[:-1], provider, model,
-                system_prompt, temperature, max_tokens, top_p
+                system_prompt, temperature, max_tokens, top_p,
             ):
                 history[-1][1] = partial
                 yield history
