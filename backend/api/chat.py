@@ -27,7 +27,7 @@ class ChatCompletionRequest(BaseModel):
 
 
 def _detect_provider(model: str, explicit: str) -> str:
-    if explicit and explicit in PROVIDER_MAP:
+    if explicit and (explicit in PROVIDER_MAP or explicit.startswith("custom_")):
         return explicit
     if model.startswith("gemini"):
         return "gemini"
@@ -36,13 +36,20 @@ def _detect_provider(model: str, explicit: str) -> str:
     return explicit or "gemini"
 
 
+def _instantiate_provider(provider_name: str):
+    """Return an instantiated provider, supporting custom_ prefix."""
+    if provider_name.startswith("custom_"):
+        from backend.providers.custom import build_custom_provider
+        return build_custom_provider(provider_name)
+    if provider_name not in PROVIDER_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+    return PROVIDER_MAP[provider_name]()
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     provider_name = _detect_provider(request.model, request.provider)
-    if provider_name not in PROVIDER_MAP:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
-
-    provider = PROVIDER_MAP[provider_name]()
+    provider = _instantiate_provider(provider_name)
     messages = [m.model_dump() for m in request.messages]
     params = {
         "model": request.model,

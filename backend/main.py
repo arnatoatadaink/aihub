@@ -10,6 +10,8 @@ from backend.api.rag import router as rag_router
 from backend.api.templates import router as templates_router
 from backend.api.jobs import router as jobs_router
 from backend.api.media import router as media_router
+from backend.api.custom_providers import router as custom_providers_router
+from backend.api.pipeline import router as pipeline_router
 
 load_dotenv()
 
@@ -33,6 +35,8 @@ app.include_router(rag_router)
 app.include_router(templates_router)
 app.include_router(jobs_router)
 app.include_router(media_router)
+app.include_router(custom_providers_router)
+app.include_router(pipeline_router)
 
 
 @app.get("/health")
