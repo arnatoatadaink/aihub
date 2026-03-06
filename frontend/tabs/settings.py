@@ -5,6 +5,7 @@ import gradio as gr
 import httpx
 
 from frontend.utils import BACKEND_URL, api_delete, api_get, api_post
+from frontend.version import APP_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,16 @@ def build_settings_tab() -> gr.Tab:
             check_btn = gr.Button("Check Backend Health")
             health_msg = gr.Textbox(label="Health", interactive=False, scale=4)
         check_btn.click(fn=check_backend_health, outputs=health_msg)
+
+        # ── Version Info ───────────────────────────────────────────────────
+        gr.Markdown("---")
+        gr.Markdown("## バージョン情報")
+        gr.Markdown(
+            f"| 項目 | 値 |\n"
+            f"|------|----|\n"
+            f"| Frontend version | `v{APP_VERSION}` |\n"
+            f"| Version file | `frontend/version.py` |"
+        )
 
         # ── Event wiring ───────────────────────────────────────────────────
 
