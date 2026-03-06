@@ -6,6 +6,7 @@ A collapsible JSON preview shows the generated definition for power users.
 """
 from __future__ import annotations
 
+import base64
 import json
 
 import gradio as gr
@@ -14,7 +15,7 @@ from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP, api_delete, api_get,
 
 MAX_STEPS = 5
 
-_BUILTIN_PROVIDERS = list(PROVIDER_MODEL_MAP.keys()) + ["imagen", "dalle", "veo", "musicfx"]
+_BUILTIN_PROVIDERS = list(PROVIDER_MODEL_MAP.keys())
 
 _PRESETS: dict[str, dict] = {
     "翻訳→要約": {
@@ -332,7 +333,7 @@ def build_pipeline_tab() -> gr.Tab:
                 )
                 input_image_box = gr.Image(
                     label="画像入力",
-                    type="base64",
+                    type="filepath",  # Gradio 5.x: returns file path string
                     visible=False,
                 )
                 run_btn = gr.Button("▶ パイプライン実行", variant="primary", size="lg")
@@ -455,11 +456,21 @@ def build_pipeline_tab() -> gr.Tab:
             payload: dict = {"definition": defn}
 
             if input_type == "テキスト＋画像" and user_input_image:
+                # user_input_image is a file path (Gradio 5.x type="filepath")
+                try:
+                    img_path = str(user_input_image)
+                    with open(img_path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode()
+                    # Detect MIME type by extension
+                    ext = img_path.rsplit(".", 1)[-1].lower()
+                    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                            "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+                    data_uri = f"data:{mime};base64,{b64}"
+                except Exception as e:
+                    return "", "", f"画像の読み込みに失敗しました: {e}"
                 payload["input_parts"] = [
                     {"type": "text", "text": str(user_input_text).strip()},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{user_input_image}"
-                    }},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
                 ]
                 payload["input"] = ""
             else:
