@@ -27,7 +27,10 @@ class MusicFXProvider(BaseProvider):
 
     async def generate(self, messages: list, params: dict) -> str:
         """Generate music from a text prompt. Returns base64 audio data URI."""
-        prompt = messages[-1].get("content", "") if messages else ""
+        raw = messages[-1].get("content", "") if messages else ""
+        prompt = raw if isinstance(raw, str) else "\n".join(
+            p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text"
+        )
         duration = params.get("duration", 30)
 
         url = f"{self.base_url}/models/musicfx:generate"

@@ -14,7 +14,7 @@ from frontend.utils import BACKEND_URL, PROVIDER_MODEL_MAP, api_delete, api_get,
 
 MAX_STEPS = 5
 
-_BUILTIN_PROVIDERS = list(PROVIDER_MODEL_MAP.keys())  # ["gemini", "openai", "anthropic"]
+_BUILTIN_PROVIDERS = list(PROVIDER_MODEL_MAP.keys()) + ["imagen", "dalle", "veo", "musicfx"]
 
 _PRESETS: dict[str, dict] = {
     "翻訳→要約": {
@@ -171,7 +171,13 @@ def _format_step_results(results: list[dict]) -> str:
             lines.append(f"**エラー:** {r['error']}")
         else:
             lines.append("**出力:**")
-            lines.append(r["output"])
+            out = r["output"]
+            if out.startswith("data:image/") or (
+                out.startswith("http") and any(ext in out for ext in [".png", ".jpg", ".webp", ".gif"])
+            ):
+                lines.append(f"![生成画像]({out})")
+            else:
+                lines.append(out)
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -314,10 +320,20 @@ def build_pipeline_tab() -> gr.Tab:
             # ── Right: Run panel ───────────────────────────────────────────
             with gr.Column(scale=2):
                 gr.Markdown("### 実行")
+                input_type_radio = gr.Radio(
+                    choices=["テキストのみ", "テキスト＋画像"],
+                    value="テキストのみ",
+                    label="入力タイプ",
+                )
                 user_input_box = gr.Textbox(
                     label="入力テキスト",
                     placeholder="パイプラインへの最初の入力を入力...",
-                    lines=6,
+                    lines=4,
+                )
+                input_image_box = gr.Image(
+                    label="画像入力",
+                    type="base64",
+                    visible=False,
                 )
                 run_btn = gr.Button("▶ パイプライン実行", variant="primary", size="lg")
                 run_status = gr.Textbox(label="ステータス", interactive=False)
@@ -417,15 +433,38 @@ def build_pipeline_tab() -> gr.Tab:
 
         preview_btn.click(fn=_preview, inputs=builder_inputs, outputs=json_preview)
 
+        # Show/hide image input based on input type selection
+        input_type_radio.change(
+            fn=lambda t: gr.update(visible=(t == "テキスト＋画像")),
+            inputs=input_type_radio,
+            outputs=input_image_box,
+        )
+
         # Run pipeline
         def _run(*all_args):
             name, desc, count = all_args[0], all_args[1], all_args[2]
-            flat = all_args[3:-1]
-            user_input = all_args[-1]
-            if not str(user_input).strip():
-                return "", "", "入力テキストを入力してください"
+            flat = all_args[3:-3]
+            user_input_text = all_args[-3]
+            user_input_image = all_args[-2]
+            input_type = all_args[-1]
+
+            if not str(user_input_text).strip() and not user_input_image:
+                return "", "", "入力テキストまたは画像を入力してください"
+
             defn = _build_definition(name, desc, count, *flat)
-            payload = {"input": user_input, "definition": defn}
+            payload: dict = {"definition": defn}
+
+            if input_type == "テキスト＋画像" and user_input_image:
+                payload["input_parts"] = [
+                    {"type": "text", "text": str(user_input_text).strip()},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/png;base64,{user_input_image}"
+                    }},
+                ]
+                payload["input"] = ""
+            else:
+                payload["input"] = str(user_input_text).strip()
+
             r = api_post("/v1/pipelines/run", payload, timeout=180)
             if "error" in r:
                 return "", "", f"実行エラー: {r['error']}"
@@ -435,7 +474,7 @@ def build_pipeline_tab() -> gr.Tab:
 
         run_btn.click(
             fn=_run,
-            inputs=builder_inputs + [user_input_box],
+            inputs=builder_inputs + [user_input_box, input_image_box, input_type_radio],
             outputs=[step_results, final_output, run_status],
         )
 
