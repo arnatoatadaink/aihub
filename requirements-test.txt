@@ -1,0 +1,28 @@
+# Lightweight test dependencies — no torch/trl/peft/gradio/langchain
+# Used by Dockerfile.test and the session-start hook
+
+# Web framework (needed for TestClient in test_api.py)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+pydantic>=2.7.0
+
+# AI provider SDKs (imported at class level in providers/)
+google-generativeai>=0.5.0
+openai>=1.30.0
+anthropic>=0.25.0
+
+# RAG (faiss_store.py imports at module level)
+faiss-cpu>=1.8.0
+numpy>=1.26.0
+
+# Utilities
+python-dotenv>=1.0.0
+PyYAML>=6.0
+aiohttp>=3.9.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.14.0

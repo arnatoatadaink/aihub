@@ -1,8 +1,6 @@
 import os
 from typing import AsyncGenerator
 
-import google.generativeai as genai
-
 from .base import BaseProvider
 
 AVAILABLE_MODELS = [
@@ -17,6 +15,7 @@ class GeminiProvider(BaseProvider):
     modal_type: str = "text"
 
     def __init__(self):
+        import google.generativeai as genai
         self.api_key = os.getenv("GEMINI_API_KEY", "")
         if self.api_key:
             genai.configure(api_key=self.api_key)
@@ -37,6 +36,7 @@ class GeminiProvider(BaseProvider):
         return system_prompt, contents
 
     async def generate(self, messages: list, params: dict) -> str:
+        import google.generativeai as genai
         model_name = params.get("model", "gemini-1.5-flash")
         system_prompt, contents = self._build_contents(messages)
 
@@ -53,6 +53,7 @@ class GeminiProvider(BaseProvider):
         return response.text
 
     async def stream(self, messages: list, params: dict) -> AsyncGenerator[str, None]:
+        import google.generativeai as genai
         model_name = params.get("model", "gemini-1.5-flash")
         system_prompt, contents = self._build_contents(messages)
 
@@ -81,6 +82,7 @@ class GeminiProvider(BaseProvider):
         if not self.api_key:
             return False
         try:
+            import google.generativeai as genai
             genai.configure(api_key=self.api_key)
             list(genai.list_models())
             return True

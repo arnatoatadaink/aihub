@@ -1,12 +1,30 @@
 """E2E API tests for FastAPI endpoints (using TestClient)."""
 import json
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture
+def _install_fake_genai():
+    """Insert stub google.generativeai into sys.modules before any import triggers it."""
+    google_pkg = types.ModuleType("google")
+    google_pkg.__path__ = []
+    genai_mod = MagicMock(name="google.generativeai")
+    genai_mod.types = MagicMock()
+    genai_mod.types.GenerationConfig = MagicMock(return_value=MagicMock())
+    sys.modules.setdefault("google", google_pkg)
+    sys.modules["google.generativeai"] = genai_mod
+    return genai_mod
+
+
+# Install before any backend import so providers/__init__.py won't hit the real package
+_GENAI_MOCK = _install_fake_genai()
+
+
+@pytest.fixture(scope="module")
 def client():
     """Create a FastAPI test client with mocked providers."""
     with patch.dict("os.environ", {
@@ -14,9 +32,8 @@ def client():
         "OPENAI_API_KEY": "sk-fake",
         "ANTHROPIC_API_KEY": "sk-ant-fake",
     }):
-        with patch("google.generativeai.configure"):
-            from backend.main import app
-            yield TestClient(app)
+        from backend.main import app
+        yield TestClient(app)
 
 
 # ======================================================================
@@ -41,7 +58,6 @@ class TestModels:
         data = resp.json()
         assert "data" in data
         model_ids = [m["id"] for m in data["data"]]
-        # Should include models from at least gemini and openai providers
         assert any("gemini" in m for m in model_ids)
         assert any("gpt" in m for m in model_ids)
 
@@ -52,23 +68,22 @@ class TestModels:
 
 class TestChatCompletions:
     def test_chat_completion_gemini(self, client):
-        with patch("google.generativeai.GenerativeModel") as mock_model_cls:
-            mock_model = MagicMock()
-            mock_response = MagicMock()
-            mock_response.text = "Test response"
-            mock_model.generate_content.return_value = mock_response
-            mock_model_cls.return_value = mock_model
+        mock_response = MagicMock()
+        mock_response.text = "Test response"
+        mock_model = MagicMock()
+        mock_model.generate_content.return_value = mock_response
+        _GENAI_MOCK.GenerativeModel.return_value = mock_model
 
-            resp = client.post("/v1/chat/completions", json={
-                "model": "gemini-1.5-flash",
-                "messages": [{"role": "user", "content": "Hello"}],
-                "provider": "gemini",
-                "stream": False,
-            })
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["choices"][0]["message"]["content"] == "Test response"
-            assert data["object"] == "chat.completion"
+        resp = client.post("/v1/chat/completions", json={
+            "model": "gemini-1.5-flash",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "provider": "gemini",
+            "stream": False,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["choices"][0]["message"]["content"] == "Test response"
+        assert data["object"] == "chat.completion"
 
     def test_chat_completion_unknown_provider(self, client):
         resp = client.post("/v1/chat/completions", json={
@@ -80,27 +95,25 @@ class TestChatCompletions:
         assert resp.status_code == 400
 
     def test_chat_completion_streaming(self, client):
-        with patch("google.generativeai.GenerativeModel") as mock_model_cls:
-            chunk1 = MagicMock()
-            chunk1.text = "Hello "
-            chunk2 = MagicMock()
-            chunk2.text = "world"
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = iter([chunk1, chunk2])
-            mock_model_cls.return_value = mock_model
+        chunk1 = MagicMock()
+        chunk1.text = "Hello "
+        chunk2 = MagicMock()
+        chunk2.text = "world"
+        mock_model = MagicMock()
+        mock_model.generate_content.return_value = iter([chunk1, chunk2])
+        _GENAI_MOCK.GenerativeModel.return_value = mock_model
 
-            resp = client.post("/v1/chat/completions", json={
-                "model": "gemini-1.5-flash",
-                "messages": [{"role": "user", "content": "Hello"}],
-                "provider": "gemini",
-                "stream": True,
-            })
-            assert resp.status_code == 200
-            assert "text/event-stream" in resp.headers["content-type"]
-            # Should contain SSE data lines
-            body = resp.text
-            assert "data:" in body
-            assert "[DONE]" in body
+        resp = client.post("/v1/chat/completions", json={
+            "model": "gemini-1.5-flash",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "provider": "gemini",
+            "stream": True,
+        })
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        body = resp.text
+        assert "data:" in body
+        assert "[DONE]" in body
 
 
 # ======================================================================
@@ -128,7 +141,6 @@ class TestTemplates:
         assert resp.status_code == 404
 
     def test_save_and_delete_template(self, client):
-        # Save
         resp = client.post("/v1/templates/test_temp", json={
             "name": "Test Template",
             "description": "For testing",
@@ -137,16 +149,13 @@ class TestTemplates:
         })
         assert resp.status_code == 200
 
-        # Verify exists
         resp = client.get("/v1/templates/test_temp")
         assert resp.status_code == 200
         assert resp.json()["name"] == "Test Template"
 
-        # Delete
         resp = client.delete("/v1/templates/test_temp")
         assert resp.status_code == 200
 
-        # Verify gone
         resp = client.get("/v1/templates/test_temp")
         assert resp.status_code == 404
 
@@ -187,5 +196,4 @@ class TestTrainingJobs:
         resp = client.post("/v1/training/jobs", json={
             "model_name_or_path": "google/gemma-2-2b-it",
         })
-        # Without a running Celery worker, this should return 503
         assert resp.status_code == 503
